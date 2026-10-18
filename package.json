@@ -1,0 +1,13 @@
+{
+  "name": "lifepilot-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LifePilot's local first-use setup and profile",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
