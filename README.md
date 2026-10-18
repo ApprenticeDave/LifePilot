@@ -3,7 +3,8 @@
 LifePilot is intended to reduce the cognitive load of everyday life with
 supportive organization and access to useful information. The longer-term
 product vision includes household and property management, personal
-organization, and user-directed financial tracking.
+organization, a more human assistant interface, and user-directed financial
+tracking.
 
 ## First local application
 

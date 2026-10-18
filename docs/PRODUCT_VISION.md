@@ -16,6 +16,13 @@ Support the property lifecycle for one or more properties, including finding and
 
 Help users keep track of birthdays, appointments, tasks, and other important events; organize todos; and support day-to-day planning and productivity.
 
+### Personal assistant
+
+Explore an assistant that uses advances in large language models and agentic
+computing to provide a more human interface to LifePilot, making it easier for
+people to express needs and work with its capabilities. Its responsibilities,
+interaction modes, and degree of initiative remain to be defined and validated.
+
 ### Personal finances
 
 Help users track income, expenses, savings, investments, and budgets.
