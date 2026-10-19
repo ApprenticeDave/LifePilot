@@ -65,14 +65,15 @@ remains research input, not approved requirements.
 The first local test bed uses Node.js built-ins (`node:http`, `node:sqlite`)
 with plain HTML, CSS, and JavaScript. It implements optional guided onboarding,
 the five profile areas and four combinable guidance preferences, one relevant
-optional follow-up, editable review, a suggested starting point, and a neutral
-workspace. A single profile and setup progress persist in a SQLite file in
-`.data/` on this computer; users can explicitly clear it in the workspace.
+optional follow-up, editable review, a suggested starting point, and a visual
+Home with a Tasks card. A single profile, setup progress and tasks persist in a
+SQLite file in `.data/` on this computer; users can explicitly clear all of
+them in the workspace.
 
 The server binds to IPv4 loopback (`127.0.0.1`) only. There is no account,
 sign-in, cloud storage, external service, or encryption. The database is
 readable to people with access to this computer and its files. The app explains
-this before collecting answers. Clearing removes the saved profile from the app;
+this before collecting answers. Clearing removes the saved profile and all tasks from the app;
 it is not a secure erase of the storage device. Country/region is saved as a
 preference, but localization is not implemented. Time zone does not activate notifications.
 
@@ -82,7 +83,15 @@ areas. Previews are explicitly unavailable and have no fake action controls.
 Local data management remains available in an expandable section. No daily
 activity counts or charts are fabricated.
 
-Task and important-date capture, reminders,
+The owner approved a first everyday task journey: one Tasks card on Home, not
+capture inside each responsibility card. Users can add a task without a date
+or category, edit its text, mark it done, and reopen it. This bounded slice
+stores only an identifier, title and completion status. Tasks remain until
+the user clears local data; completed tasks are available in an expandable
+section. There is no automatic scheduling or planning. See the
+[task journey](USER_JOURNEYS.md#journey-2-get-one-thing-off-my-mind).
+
+Important-date capture, reminders,
 notes and document storage, property workflows, and financial tracking are not
 implemented and must not be represented as available features. Broader product
 requirements and future workflows still need definition and validation.

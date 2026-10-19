@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   blankState, validateState, nextStage, previousStage, changeDifficulty,
+  validateTask,
 } = require("../model");
 
 test("blank profile can be validated and setup moves through at most one follow-up", () => {
@@ -11,6 +12,18 @@ test("blank profile can be validated and setup moves through at most one follow-
   assert.equal(nextStage({ ...state, stage: "difficulty", profile: { ...state.profile, difficulty: "unsure" } }), "review");
   assert.equal(nextStage({ ...state, stage: "difficulty", profile: { ...state.profile, difficulty: "finding" } }), "followup");
   assert.equal(nextStage({ ...state, stage: "followup" }), "review");
+});
+
+test("tasks require only bounded nonblank text and an explicit boolean status", () => {
+  assert.deepEqual(validateTask({ title: "  Arrange a boiler service  ", completed: false }),
+    { title: "Arrange a boiler service", completed: false });
+  assert.equal(validateTask({ title: "x".repeat(240), completed: true }).title.length, 240);
+  for (const value of [null, [], {}, { title: "Task" }, { title: "Task", completed: "false" },
+    { title: "", completed: false }, { title: " \n\t ", completed: false },
+    { title: "x".repeat(241), completed: false }, { title: "bad\0text", completed: false },
+    { title: 123, completed: false }, { title: "Task", completed: false, due: "tomorrow" }]) {
+    assert.throws(() => validateTask(value));
+  }
 });
 
 test("changing the selected difficulty clears its dependent answer", () => {

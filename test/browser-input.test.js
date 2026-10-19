@@ -22,7 +22,7 @@ test("home dashboard offers working profile actions and honest area previews", a
         },
         querySelectorAll() { return []; },
       },
-      async fetch() { return { ok: true, async json() { return { state, version: 0 }; } }; },
+      async fetch() { return { ok: true, async json() { return { state, tasks: [], version: 0 }; } }; },
     });
     await new Promise((resolve) => setImmediate(resolve));
     assert.match(markup, /id="home-heading">Home/);
@@ -76,7 +76,7 @@ test("typing retains the input DOM and uses a single delegated input listener", 
           version++;
           return { ok: true, async json() { return { state: writes.at(-1), version }; } };
         }
-        return { ok: true, async json() { return { state, version }; } };
+        return { ok: true, async json() { return { state, tasks: [], version }; } };
       },
     },
   );
@@ -88,7 +88,7 @@ test("typing retains the input DOM and uses a single delegated input listener", 
     listeners.get("input")({ target: input });
   }
   assert.equal(renders, 1, "typing must not replace a focused field and trigger recursive blur/change");
-  assert.equal(listeners.size, 6, "one input listener and five transition-only capture guards");
+  assert.equal(listeners.size, 7, "input, task form submit and five transition-only capture guards");
   await scheduledSave();
   assert.equal(writes.at(-1).profile.nickname, "Alex");
 });
@@ -134,7 +134,7 @@ test("region dropdown is local, optional, escaped, and preserves own-word answer
           saved = JSON.parse(options.body);
           version++;
         }
-        return { ok: true, async json() { return { state: saved || state, version }; } };
+        return { ok: true, async json() { return { state: saved || state, tasks: [], version }; } };
       },
     },
   );
@@ -173,13 +173,14 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 // A small DOM/event fixture, not a browser emulator. Buttons are reconstructed
 // from rendered markup; their real application handlers drive every transition.
-async function browserFixture(initial) {
+async function browserFixture(initial, initialTasks = []) {
   const listeners = new Map();
   const fields = new Map();
   const timers = new Map();
   const plans = [];
   const requests = [];
   let saved = clone(initial);
+  let tasks = clone(initialTasks);
   let version = 7;
   let timerId = 0;
   let renders = 0;
@@ -196,14 +197,14 @@ async function browserFixture(initial) {
           const attributes = Object.fromEntries([...match[1].matchAll(/([\w-]+)="([^"]*)"/g)].map((attribute) => [attribute[1], attribute[2]]));
           return {
             attributes,
-            dataset: { action: attributes["data-action"], stage: attributes["data-stage"] },
+            dataset: { action: attributes["data-action"], stage: attributes["data-stage"], taskId: attributes["data-task-id"] },
             addEventListener(name, handler) { this[name] = handler; },
             focus() {},
           };
         });
       },
       querySelectorAll(selector) {
-        if (selector === "[data-action]") return this.buttons;
+        if (selector === "[data-action]") return this.buttons.filter((button) => button.dataset.action);
         const name = selector.match(/name="([^"]+)"/)?.[1];
         return [...fields.values()].filter((field) => field.name === name && field.checked);
       },
@@ -215,10 +216,21 @@ async function browserFixture(initial) {
       replaceChildren() { this.innerHTML = ""; },
     };
   }
+  const taskCard = container();
+  const taskStatus = { textContent: "", classList: { toggle() {} } };
+  const completedDetails = { open: false };
+  const moreTasksDetails = { open: false };
   const root = container();
   const originalDescriptor = Object.getOwnPropertyDescriptor(root, "innerHTML");
   Object.defineProperty(root, "innerHTML", {
-    set(value) { renders++; originalDescriptor.set.call(this, value); },
+    set(value) {
+      renders++;
+      originalDescriptor.set.call(this, value);
+      const taskMarkup = value.match(/<section id="tasks-card"[^>]*>([\s\S]*?)<\/section>/)?.[1] || "";
+      taskCard.innerHTML = taskMarkup;
+      completedDetails.open = /<details id="completed-tasks" open>/.test(taskMarkup);
+      moreTasksDetails.open = /<details id="more-open-tasks" open>/.test(taskMarkup);
+    },
   });
   root.addEventListener = (name, handler) => listeners.set(name, handler);
   root.setAttribute = (name, value) => { root[name] = value; };
@@ -230,9 +242,9 @@ async function browserFixture(initial) {
   const clear = container();
   const document = {
     querySelector(selector) {
-      return { "#app": root, "#save-status": status, "#retry-save": retry, "#reload-state": reload, "#skip-confirm": skip, "#clear-confirm": clear }[selector] || null;
+      return { "#app": root, "#save-status": status, "#retry-save": retry, "#reload-state": reload, "#skip-confirm": skip, "#clear-confirm": clear, "#tasks-card": taskCard, "#task-message": taskStatus, "#completed-tasks": completedDetails, "#more-open-tasks": moreTasksDetails }[selector] || null;
     },
-    querySelectorAll() { return root.buttons; },
+    querySelectorAll() { return [...root.buttons.filter((button) => button.dataset.action && !button.dataset.action.startsWith("task-")), ...taskCard.querySelectorAll("[data-action]")]; },
     getElementById(id) { return fields.get(id) || null; },
   };
   vm.runInNewContext(appSource, {
@@ -244,21 +256,28 @@ async function browserFixture(initial) {
     setTimeout(callback) { timers.set(++timerId, callback); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     async fetch(url, options) {
-      if (!options?.method) return { ok: true, json: async () => ({ state: clone(saved), version }) };
+      if (!options?.method) return { ok: true, json: async () => ({ state: clone(saved), tasks: clone(tasks), version }) };
       const request = { url, state: JSON.parse(options.body), version: options.headers["X-LifePilot-Version"] };
       requests.push(request);
       const plan = plans.shift();
       if (plan?.gate) await plan.gate;
       const status = plan?.status || (request.version === String(version) ? 200 : 409);
       if (status !== 200) return { ok: false, status, json: async () => ({ error: status === 409 ? "Stale version" : "Synthetic save failure" }) };
-      saved = url === "/api/clear" ? blankState() : clone(request.state);
+      if (url === "/api/tasks") tasks.unshift({ id: `synthetic-${version}`, ...clone(request.state), title: request.state.title.trim() });
+      else if (url.startsWith("/api/tasks/")) Object.assign(tasks.find((task) => task.id === url.split("/").at(-1)), clone(request.state));
+      else {
+        saved = url === "/api/clear" ? blankState() : clone(request.state);
+        if (url === "/api/clear") tasks = [];
+      }
       version++;
-      return { ok: true, status, json: async () => ({ state: clone(saved), version }) };
+      return { ok: true, status, json: async () => ({ state: clone(saved), tasks: clone(tasks), version }) };
     },
   });
   await settle();
   return {
-    root, status, retry, reload, requests,
+    root, status, retry, reload, requests, taskStatus,
+    get taskMarkup() { return taskCard.markup; },
+    get tasks() { return clone(tasks); },
     get markup() { return root.markup; },
     get saved() { return clone(saved); },
     get version() { return version; },
@@ -266,6 +285,7 @@ async function browserFixture(initial) {
     get headingFocus() { return headingFocus; },
     get reloads() { return reloads; },
     get confirmation() { return confirmation; },
+    expandTasks(value = true) { moreTasksDetails.open = value; },
     externalChange() { version++; saved.profile.nickname = "Other window"; },
     confirm(value) { confirmResult = value; },
     hold() {
@@ -290,8 +310,14 @@ async function browserFixture(initial) {
       listeners.get(type)({ type, key, preventDefault() { prevented = true; } });
       return prevented;
     },
+    submitTask(kind = "add", id) {
+      let prevented = false;
+      const result = listeners.get("submit")({ target: { dataset: { taskForm: kind, taskId: id } }, preventDefault() { prevented = true; } });
+      assert.equal(prevented, true);
+      return result;
+    },
     button(action, stage) {
-      const found = [...root.buttons, ...skip.buttons, ...clear.buttons].find((button) => button.dataset.action === action && (!stage || button.dataset.stage === stage));
+      const found = [...taskCard.buttons, ...root.buttons, ...skip.buttons, ...clear.buttons].find((button) => button.dataset.action === action && (!stage || button.dataset.stage === stage || button.dataset.taskId === stage));
       assert.ok(found, `Expected rendered button ${action} ${stage || ""}`);
       return found;
     },
@@ -299,6 +325,141 @@ async function browserFixture(initial) {
     action(action, stage) { return this.click(this.button(action, stage)); },
   };
 }
+
+test("Home tasks capture, edit, complete and reopen without changing profile or autosaving drafts", async () => {
+  const state = blankState();
+  state.stage = "workspace";
+  state.profile.nickname = "Synthetic Alex";
+  const app = await browserFixture(state);
+  assert.match(app.taskMarkup, /No tasks yet/);
+  app.input("taskTitle", 'Arrange <a "service">');
+  assert.equal(app.requests.length, 0, "typing is a draft, not an automatic task");
+  const renders = app.renders;
+  await app.submitTask();
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.requests[0].url, "/api/tasks");
+  assert.equal(app.requests[0].version, "7");
+  const id = app.tasks[0].id;
+  assert.match(app.taskMarkup, /Arrange &lt;a &quot;service&quot;&gt;/);
+  assert.doesNotMatch(app.taskMarkup, /<a "service">/);
+  assert.match(app.taskMarkup, /id="task-title"[^>]*value=""/);
+  assert.deepEqual(app.saved, state, "task saves must not alter the profile or resume point");
+  assert.equal(app.renders, renders, "task mutations replace only their own card");
+  await app.action("task-edit", id);
+  app.input("taskEditTitle", "Arrange a boiler service");
+  await app.submitTask("edit", id);
+  assert.deepEqual(app.tasks, [{ id, title: "Arrange a boiler service", completed: false }]);
+  await app.action("task-toggle", id);
+  assert.equal(app.tasks[0].completed, true);
+  assert.match(app.taskMarkup, /Completed \(1\)/);
+  assert.match(app.taskMarkup, /Reopen: Arrange a boiler service/);
+  assert.match(app.taskMarkup, /No unfinished tasks/);
+  await app.action("task-toggle", id);
+  assert.equal(app.tasks[0].completed, false);
+  assert.match(app.taskMarkup, /Mark done: Arrange a boiler service/);
+  assert.doesNotMatch(app.taskMarkup, /Completed \(1\)/);
+  assert.equal(app.version, 11);
+});
+
+test("Home previews two open tasks and keeps the expanded list available while editing", async () => {
+  const state = blankState();
+  state.stage = "workspace";
+  const initialTasks = [1, 2, 3, 4].map((number) => ({
+    id: `synthetic-task-${number}`,
+    title: `Synthetic task ${number}`,
+    completed: false,
+  }));
+  const app = await browserFixture(state, initialTasks);
+
+  assert.match(app.taskMarkup, /<h3>To do \(4\)<\/h3>/);
+  assert.match(app.taskMarkup, /<details id="more-open-tasks"><summary>Show all 4 tasks<\/summary>/);
+  const preview = app.taskMarkup.match(/<ul id="task-preview"[^>]*>([\s\S]*?)<\/ul>/)?.[1] || "";
+  const additional = app.taskMarkup.match(/<ul id="more-open-task-list"[^>]*>([\s\S]*?)<\/ul>/)?.[1] || "";
+  assert.match(preview, /Synthetic task 1/);
+  assert.match(preview, /Synthetic task 2/);
+  assert.doesNotMatch(preview, /Synthetic task 3/);
+  assert.match(additional, /Synthetic task 3/);
+  assert.match(additional, /Synthetic task 4/);
+
+  app.expandTasks();
+  await app.action("task-edit", "synthetic-task-3");
+  assert.match(app.taskMarkup, /<details id="more-open-tasks" open>/);
+  assert.match(app.taskMarkup, /data-task-form="edit" data-task-id="synthetic-task-3"/);
+  app.input("taskEditTitle", "Updated synthetic task 3");
+  await app.submitTask("edit", "synthetic-task-3");
+  assert.match(app.taskMarkup, /<details id="more-open-tasks" open>/);
+  assert.equal(app.tasks[2].title, "Updated synthetic task 3");
+});
+
+test("task failures retain drafts, serialize repeated submits, and reject blank text", async () => {
+  const state = blankState();
+  state.stage = "workspace";
+  const app = await browserFixture(state);
+  app.input("taskTitle", " \t ");
+  await app.submitTask();
+  assert.equal(app.requests.length, 0);
+  assert.match(app.taskStatus.textContent, /1 to 240/);
+  app.input("taskTitle", "Arrange a boiler service");
+  const release = app.hold();
+  app.fail();
+  const saving = app.submitTask();
+  await app.submitTask();
+  assert.equal(app.requests.length, 1, "overlapping submit must not add a duplicate");
+  release();
+  await saving;
+  assert.equal(app.tasks.length, 1);
+
+  await app.action("task-edit", app.tasks[0].id);
+  app.input("taskEditTitle", "Draft change");
+  await app.submitTask("edit", app.tasks[0].id);
+  assert.match(app.taskStatus.textContent, /Synthetic save failure/);
+  assert.equal(app.tasks[0].title, "Arrange a boiler service");
+  await app.submitTask("edit", app.tasks[0].id);
+  assert.equal(app.tasks[0].title, "Draft change", "failed edit text must be retained for explicit retry");
+  await app.action("task-edit", app.tasks[0].id);
+  app.input("taskEditTitle", "Canceled change");
+  await app.action("task-cancel");
+  assert.equal(app.tasks[0].title, "Draft change");
+
+  app.input("taskTitle", "Second task");
+  app.fail();
+  await app.submitTask();
+  assert.equal(app.tasks.length, 1);
+  assert.match(app.taskStatus.textContent, /Synthetic save failure/);
+  await app.submitTask();
+  assert.equal(app.tasks[0].title, "Second task", "failed capture must keep text for retry");
+  assert.equal(app.root["aria-busy"], undefined);
+});
+
+test("task conflicts keep drafts visible, block further mutations and cannot undo a clear", async () => {
+  const state = blankState();
+  state.stage = "workspace";
+  const app = await browserFixture(state);
+  app.input("taskTitle", "Unsaved synthetic task");
+  app.externalChange();
+  await app.submitTask();
+  assert.equal(app.tasks.length, 0);
+  assert.match(app.status.textContent, /Save conflict/);
+  assert.equal(app.reload.hidden, false);
+  await app.submitTask();
+  await app.action("confirm-clear");
+  assert.equal(app.requests.length, 1);
+  app.confirm(false);
+  app.reload.click();
+  assert.equal(app.reloads, 0);
+  app.confirm(true);
+  app.reload.click();
+  assert.equal(app.reloads, 1);
+  assert.match(app.confirmation, /discards your unsaved draft/);
+
+  const clearing = await browserFixture(state, [{ id: "synthetic-task", title: "Saved task", completed: false }]);
+  await clearing.action("confirm-clear");
+  await clearing.action("clear");
+  assert.deepEqual(clearing.tasks, []);
+  assert.equal(clearing.saved.stage, "welcome");
+  await clearing.action("explore");
+  assert.match(clearing.taskMarkup, /No tasks yet/);
+});
 
 test("transition lock covers dirty save and stage save without replacing the focused DOM", async () => {
   const state = blankState();

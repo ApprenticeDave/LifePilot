@@ -2,6 +2,7 @@
   "use strict";
   const root = document.querySelector("#app");
   root.addEventListener("input", updateFromForm);
+  root.addEventListener("submit", onTaskSubmit);
   const status = document.querySelector("#save-status");
   const retrySave = document.querySelector("#retry-save");
   const reloadState = document.querySelector("#reload-state");
@@ -45,6 +46,13 @@
   // Return destinations are session-only. Reload retains saved answers/stage,
   // but resumes normal setup navigation rather than a previous targeted edit.
   let editContext = null;
+  let tasks = [];
+  let taskDraft = "";
+  let taskEdit = null;
+  let taskMessage = "";
+  let taskFailed = false;
+  let completedOpen = false;
+  let openTasksExpanded = false;
 
   function blockTransitionInput(event) {
     if (transitioning && (event.type !== "keydown" || event.key !== "Tab")) event.preventDefault();
@@ -100,8 +108,8 @@
     return `<section class="card welcome-card"><p class="eyebrow">A gentle place to begin</p><h1>Welcome to LifePilot</h1>
       <p class="lead">Let's find a useful starting point together. You can skip any question, pause, or explore without setup.</p>
       <div class="privacy-notice"><h2>Your information stays here</h2>
-        <p>Your setup answers are saved in a database on this computer so you can come back after closing or restarting LifePilot. There is no account, sign-in, cloud storage, or external service.</p>
-        <p>The local database is <strong>not encrypted</strong>. Anyone with access to this computer or its files may be able to read it. Share only what you're comfortable storing here. Clearing your profile removes it from LifePilot; it is not a secure erase of the storage device.</p>
+        <p>Your setup answers and any tasks you add are saved in a database on this computer so you can come back after closing or restarting LifePilot. There is no account, sign-in, cloud storage, or external service.</p>
+        <p>The local database is <strong>not encrypted</strong>. Anyone with access to this computer or its files may be able to read it. Share only what you're comfortable storing here. Clearing your local data removes your profile and tasks from LifePilot; it is not a secure erase of the storage device.</p>
         <p>Skipped answers stay unanswered; LifePilot doesn't infer a difficulty from them. Your region is recorded only as a preference; this first version does not provide region-specific localization. Time zone is not used to enable notifications.</p></div>
       <div class="actions">${button("Get started", "next", "primary")}${button("Explore without setup", "explore")}      ${state.stage !== "welcome" || hasAnyProfile() ? button("Continue setup", "resume") : ""}</div>
       ${state.stage !== "welcome" || hasAnyProfile() ? `<div class="actions">${button("Review answers", "review")}</div>` : ""}
@@ -273,13 +281,13 @@
   function suggestion() {
     const p = state.profile;
     const content = {
-      remembering: ["Capture one task or important date", "This could give you one simple place to begin. Task and date capture isn't built yet; this is a suggested future capability."],
+      remembering: ["Capture one task", "Use the Tasks card on Home to put something down and find it again. Dates and reminders aren't built yet."],
       starting: ["Break one activity into a manageable next step", "A short next-step plan could make a larger activity easier to approach. Task planning isn't built yet."],
       finding: ["Make a note about where a useful document is kept", "You could record a location without uploading the document. Notes and document organization aren't built yet."],
       ongoing: ["Make a short list for one responsibility", "A small list could make one ongoing responsibility easier to see. Lists and tracking aren't built yet."],
-      other: ["Choose one small thing you'd like to explore", "You can decide what feels relevant. LifePilot's task and note capabilities aren't built yet."],
-      unsure: ["Explore the workspace", "There are no task, reminder, or document tools in this first version. You can look around without committing to a setup answer."],
-      "": ["Explore the workspace", "You can explore without choosing a problem. Task, reminder, and document tools aren't built yet."],
+      other: ["Choose one small thing you'd like to explore", "You can decide what feels relevant. You can capture a task on Home; notes aren't built yet."],
+      unsure: ["Explore the workspace", "You can capture a task on Home or look around without committing to a setup answer. Reminders and document tools aren't built yet."],
+      "": ["Explore the workspace", "You can explore without choosing a problem, or capture a task on Home. Reminders and document tools aren't built yet."],
     };
     return content[p.difficulty] || content[""];
   }
@@ -325,6 +333,7 @@
             ${reachedStartingPoint ? button("Revisit setup", "resume") : ""}</div>
         </div>
       </section>
+      <section id="tasks-card" class="dashboard-panel tasks-panel" aria-labelledby="tasks-heading">${taskCardContent()}</section>
       <div class="dashboard-grid">
         <section class="dashboard-panel" aria-labelledby="areas-heading">
           <h2 id="areas-heading">${selectedAreas.length ? "Your areas" : "Areas to explore"}</h2>
@@ -341,12 +350,118 @@
           <div class="local-note"><strong>Saved on this computer</strong><p>No cloud sync or sign-in. The local database is not encrypted.</p></div>
         </aside>
       </div>
-      <p class="dashboard-scope">This first version supports your profile and setup. Tasks, reminders, notes, property tools, and financial tracking are not built yet.</p>
+      <p class="dashboard-scope">This first version supports your profile, setup, and a local task list. Reminders, dates, notes, property tools, and financial tracking are not built yet.</p>
       <details class="dashboard-data"><summary>Manage local data</summary>
-        <p>Remove your saved setup and profile from LifePilot on this computer. This cannot be undone in the app and is not a secure erase.</p>
+        <p>Remove your saved setup, profile, and all tasks from LifePilot on this computer. This cannot be undone in the app and is not a secure erase.</p>
         ${button("Clear my local data", "confirm-clear")}<div id="clear-confirm"></div>
       </details>
     </section>`;
+  }
+  function taskCardContent() {
+    const openTasks = tasks.filter((task) => !task.completed);
+    const previewTasks = openTasks.slice(0, 2);
+    const completed = tasks.filter((task) => task.completed);
+    if (openTasks.length <= previewTasks.length) openTasksExpanded = false;
+    const row = (task) => {
+      const title = escapeText(task.title);
+      if (taskEdit?.id === task.id) {
+        return `<li class="task-row"><form data-task-form="edit" data-task-id="${task.id}">
+          ${textField("taskEditTitle", "Edit task", taskEdit.title, "Save changes when you're ready.", 240)}
+          <div class="task-actions"><button type="submit" class="button secondary">Save changes</button>
+          <button type="button" class="text-button" data-action="task-cancel" data-task-id="${task.id}">Cancel edit</button></div></form></li>`;
+      }
+      return `<li class="task-row"><span class="task-title">${title}</span><div class="task-actions">
+        <button type="button" class="button secondary" data-action="task-toggle" data-task-id="${task.id}" aria-label="${task.completed ? "Reopen" : "Mark done"}: ${title}">${task.completed ? "Reopen" : "Mark done"}</button>
+        <button type="button" class="text-button" data-action="task-edit" data-task-id="${task.id}" aria-label="Edit task: ${title}">Edit</button>
+        </div></li>`;
+    };
+    return `<h2 id="tasks-heading" tabindex="-1">Tasks</h2>
+      <p class="dashboard-detail">Get something off your mind. No date or category needed.</p>
+      <form data-task-form="add">
+        <div class="field"><label for="task-title">What would you like to do?</label>
+          <input id="task-title" name="taskTitle" type="text" maxlength="240" value="${escapeText(taskDraft)}" autocomplete="off" required aria-describedby="task-hint">
+          <span id="task-hint" class="field-hint">Saved on this computer when you select Add task. No reminders are sent.</span></div>
+        <button type="submit" class="button secondary">Add task</button>
+      </form>
+      <p id="task-message" role="status" aria-live="polite" class="task-message${taskFailed ? " is-error" : ""}">${escapeText(taskMessage)}</p>
+      <h3>To do (${openTasks.length})</h3>${openTasks.length ? `<ul id="task-preview" class="task-list">${previewTasks.map(row).join("")}</ul>
+        ${openTasks.length > previewTasks.length ? `<details id="more-open-tasks"${openTasksExpanded ? " open" : ""}><summary>Show all ${openTasks.length} tasks</summary>
+          <ul id="more-open-task-list" class="task-list">${openTasks.slice(previewTasks.length).map(row).join("")}</ul></details>` : ""}` :
+        `<p class="dashboard-detail">${completed.length ? "No unfinished tasks. Add something whenever you need to." : "No tasks yet. Add something you'd like to come back to."}</p>`}
+      ${completed.length ? `<details id="completed-tasks" ${completedOpen ? "open" : ""}><summary>Completed (${completed.length})</summary>
+        <ul class="task-list">${completed.map(row).join("")}</ul></details>` : ""}`;
+  }
+  function renderTasks(focusId = "task-title") {
+    const card = document.querySelector("#tasks-card");
+    card.innerHTML = taskCardContent();
+    card.querySelectorAll("[data-action]").forEach((el) => el.addEventListener("click", onAction));
+    document.getElementById(focusId)?.focus();
+  }
+  function taskStatus(message, failed = false) {
+    taskMessage = message;
+    taskFailed = failed;
+    const target = document.querySelector("#task-message");
+    if (target) {
+      target.textContent = message;
+      target.classList.toggle("is-error", failed);
+    }
+  }
+  function onTaskSubmit(event) {
+    const form = event.target;
+    if (!form.dataset.taskForm) return;
+    event.preventDefault();
+    return onAction({ currentTarget: { dataset: {
+      action: form.dataset.taskForm === "add" ? "task-add" : "task-save",
+      taskId: form.dataset.taskId,
+    } } });
+  }
+  async function handleTaskAction(action, id) {
+    completedOpen = Boolean(document.querySelector("#completed-tasks")?.open);
+    openTasksExpanded = Boolean(document.querySelector("#more-open-tasks")?.open);
+    const task = tasks.find((item) => item.id === id);
+    if (action === "task-cancel") {
+      taskEdit = null;
+      taskStatus("");
+      return renderTasks("tasks-heading");
+    }
+    if (action === "task-edit") {
+      if (taskEdit && taskEdit.id !== id) return taskStatus("Save or cancel your current edit before editing another task.", true);
+      if (!task) return taskStatus("That task is no longer available. Reload saved data before continuing.", true);
+      taskEdit = { id, title: task.title };
+      taskStatus("");
+      return renderTasks("taskEditTitle");
+    }
+    if (action !== "task-add" && !task) return taskStatus("That task is no longer available. Reload the page before continuing.", true);
+    const title = (action === "task-add" ? taskDraft : action === "task-save" ? taskEdit?.title : task.title)?.trim();
+    if (!title || title.length > 240) return taskStatus("Enter a task of 1 to 240 characters.", true);
+    if ((dirty || activeSave) && !(await persist(false))) return;
+    taskStatus("Saving task...");
+    try {
+      const response = await fetch(action === "task-add" ? "/api/tasks" : `/api/tasks/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-LifePilot-Request": "1", "X-LifePilot-Version": String(serverVersion) },
+        body: JSON.stringify({ title, completed: action === "task-add" ? false : action === "task-toggle" ? !task.completed : task.completed }),
+        cache: "no-store",
+      });
+      const result = await response.json();
+      if (response.status === 409) {
+        taskStatus("Your task change wasn't saved. Your draft is still here; see the save conflict message below.", true);
+        return reportConflict();
+      }
+      if (!response.ok) throw new Error(result.error || "Could not save this task.");
+      serverVersion = result.version;
+      tasks = result.tasks;
+      if (action === "task-add") taskDraft = "";
+      if (action === "task-save") taskEdit = null;
+      if (action === "task-toggle" && taskEdit?.id === id) taskEdit = null;
+      taskStatus(action === "task-add" ? "Task added and saved on this computer." :
+        action === "task-save" ? "Task changes saved on this computer." :
+          task.completed ? "Task reopened and saved on this computer." : "Task marked done and saved on this computer.");
+      renderTasks(action === "task-add" ? "task-title" : "tasks-heading");
+      setStatus(taskMessage);
+    } catch (error) {
+      taskStatus(`${error.message} Your task change is still on screen. Try again before leaving.`, true);
+    }
   }
   function hasAnyProfile() {
     const p = state.profile;
@@ -377,6 +492,12 @@
   function updateFromForm(event) {
     if (transitioning) return;
     const el = event.target;
+    if (el.name === "taskTitle" || el.name === "taskEditTitle") {
+      if (el.name === "taskTitle") taskDraft = el.value;
+      else if (taskEdit) taskEdit.title = el.value;
+      if (!conflicted) taskStatus("Not saved yet.");
+      return;
+    }
     const p = state.profile;
     if (el.name === "countryRegionChoice") {
       customRegionSelected = el.value === "__other";
@@ -521,6 +642,7 @@
   }
   async function handleAction(event) {
     const action = event.currentTarget.dataset.action;
+    if (action.startsWith("task-")) return handleTaskAction(action, event.currentTarget.dataset.taskId);
     if (action === "next") return navigate(nextStageForCurrent());
     if (action === "back") {
       const target = state.stage === "starting" ? "review" : previousStageForCurrent();
@@ -552,9 +674,9 @@
     }
     if (action === "confirm-clear") {
       const box = document.querySelector("#clear-confirm");
-      box.innerHTML = `<div class="skip-confirm"><p>This removes the saved profile and setup progress from LifePilot on this computer. It cannot be restored through the app.</p>
+      box.innerHTML = `<div class="skip-confirm"><p>This removes the saved profile, setup progress, and all tasks from LifePilot on this computer. It cannot be restored through the app.</p>
         <div class="actions"><button class="button secondary" type="button" data-action="cancel-clear">Keep my data</button>
-        <button class="button primary" type="button" data-action="clear">Clear my saved profile</button></div></div>`;
+        <button class="button primary" type="button" data-action="clear">Clear all my local data</button></div></div>`;
       box.querySelectorAll("[data-action]").forEach((el) => el.addEventListener("click", onAction));
     }
     if (action === "cancel-clear") return document.querySelector("#clear-confirm")?.replaceChildren();
@@ -569,6 +691,13 @@
         if (!response.ok) throw new Error(result.error || "Could not clear local data.");
         serverVersion = result.version;
         state = result.state;
+        tasks = result.tasks;
+        taskDraft = "";
+        taskEdit = null;
+        taskMessage = "";
+        taskFailed = false;
+        completedOpen = false;
+        openTasksExpanded = false;
         editContext = null;
         customRegionSelected = false;
         dirty = false;
@@ -608,6 +737,7 @@
       if (!response.ok) throw new Error("Could not load your saved local setup.");
       const result = await response.json();
       state = result.state;
+      tasks = result.tasks;
       serverVersion = result.version;
       render(true);
     } catch (error) {

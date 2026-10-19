@@ -163,3 +163,9 @@ now has a next-step panel, profile/guidance shortcuts, and visual responsibility
 cards marked unavailable. It does not include Today/Coming up lists, working
 task controls or fabricated metrics. The recommendations above remain the
 research record; intended-user validation of the redesign is outstanding.
+
+Later implementation update, 2026-10-18: the owner approved a separate everyday
+task journey. Home now includes working quick capture, editing, completion and
+reopening in one Tasks card. Earlier profile-only constraints above describe
+the research baseline, not a prohibition on the newly implemented task list.
+See the [current task journey](../../USER_JOURNEYS.md#journey-2-get-one-thing-off-my-mind).

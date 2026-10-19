@@ -89,6 +89,21 @@ button { font: inherit; cursor: pointer; }
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 24px; }
 .dashboard-panel { min-width: 0; background: #fff; border: 1px solid var(--line); padding: 24px; border-radius: 18px; }
 .dashboard-panel > .area-icon { margin-bottom: 16px; }
+.tasks-panel { width: min(100%, 760px); margin-bottom: 24px; padding: 18px 20px; }
+.tasks-panel > .dashboard-detail { margin-bottom: 8px; }
+.tasks-panel form[data-task-form="add"] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; }
+.tasks-panel .field { min-width: 0; margin: 8px 0; }
+.tasks-panel form[data-task-form="add"] > .button { margin-bottom: 8px; }
+.tasks-panel h3 { font-size: 1.05rem; margin: 8px 0; }
+.task-list { list-style: none; margin: 0; padding: 0; }
+.task-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding: 8px 0; }
+.task-title { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.task-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.task-row form { width: 100%; min-width: 0; }
+.task-message { min-height: 24px; margin: 12px 0; color: var(--muted); }
+.task-message:empty { display: none; }
+.task-message.is-error { color: var(--warning); }
+.tasks-panel summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
 .area-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .area-card { min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
 .area-card h3 { font-size: 1rem; margin: 14px 0 8px; }
@@ -120,11 +135,14 @@ button { font: inherit; cursor: pointer; }
   .summary-row button { grid-column: 2; grid-row: 1; }
   .actions { align-items: stretch; }
   .actions .button { flex: 1 0 auto; }
+  .tasks-panel form[data-task-form="add"] { grid-template-columns: minmax(0, 1fr); }
+  .tasks-panel form[data-task-form="add"] > .button { justify-self: start; }
 }
 @media (max-width: 760px) {
   .dashboard-grid { grid-template-columns: minmax(0, 1fr); }
   .dashboard-heading { align-items: flex-start; flex-direction: column; }
   .dashboard-next { grid-template-columns: minmax(0, 1fr); padding: 22px; }
+  .tasks-panel { width: 100%; }
 }
 @media (max-width: 420px) {
   .area-grid { grid-template-columns: minmax(0, 1fr); }

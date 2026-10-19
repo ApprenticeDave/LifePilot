@@ -68,6 +68,17 @@ function boundedText(value, max, label) {
   return value.trim();
 }
 
+function validateTask(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).length !== 2 || !Object.hasOwn(value, "title") ||
+      !Object.hasOwn(value, "completed") || typeof value.completed !== "boolean") {
+    throw new InvalidState("A task needs only a title and a completed status.");
+  }
+  const title = boundedText(value.title, 240, "Task");
+  if (!title) throw new InvalidState("Enter something you'd like to do.");
+  return { title, completed: value.completed };
+}
+
 function validateState(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new InvalidState("Setup data must be an object.");
@@ -210,4 +221,5 @@ module.exports = {
   GUIDANCE, RESPONSIBILITIES, DIFFICULTIES, FOLLOWUPS, STAGES,
   blankState, validateState, nextStage, previousStage, followupStage,
   changeDifficulty, clearAnswer, InvalidState,
+  validateTask,
 };

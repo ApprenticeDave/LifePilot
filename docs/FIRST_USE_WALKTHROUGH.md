@@ -23,7 +23,8 @@ guidance preferences; optional multiple responsibilities and own-word entry;
 independent region and IANA time zone; one selected difficulty and at most one
 relevant follow-up; editable review; a starting-point suggestion; dashboard
 handoff; back, skip, explicit remove-and-skip, pause, resume, profile editing,
-and confirmed local deletion. Progress and one profile are saved in a
+and confirmed local deletion. Home also has a Tasks card with quick capture,
+editing, completion and reopening. Progress, one profile and tasks are saved in a
 single-user SQLite database on this computer. The setup preferences affect
 relevant prompts, overview/context, progress language, and starting-point
 presentation.
@@ -39,10 +40,11 @@ cleared profile.
 The application binds to `127.0.0.1` and has no account, cloud storage,
 external service, notifications, or encryption. Its local SQLite file is
 readable by anyone with access to this computer or its files. Clearing the
-profile removes it from LifePilot but is not a secure erase of storage.
+local data removes the profile, setup and all tasks from LifePilot but is not
+a secure erase of storage.
 Region-specific localization is not implemented. The workspace clearly
-describes future task, reminder, note/document, property, and finance
-capabilities as unimplemented; it does not create records or trigger actions.
+describes future reminder, note/document, property, and finance
+capabilities as unimplemented. The task list does not schedule reminders.
 
 Controls, wording, sequence, and personalization in the sections below are
 design history where they differ from the running interface, not a promise of

@@ -32,6 +32,7 @@ test("SQLite profile and resume progress persist after store reopen", (t) => {
 
   store = createStore(location);
   assert.deepEqual(store.load(), expected);
+  assert.deepEqual(store.loadTasks(), []);
   assert.equal(store.getVersion(), 1);
 });
 
@@ -153,7 +154,7 @@ test("HTTP allowlist serves app files, rejects arbitrary paths and protects muta
   assert.equal((await fetch(`${base}/%2e%2e/server.js`)).status, 404);
   const initial = await fetch(`${base}/api/state`);
   assert.equal(initial.status, 200);
-  assert.deepEqual(await initial.json(), { state: blankState(), version: 0 });
+  assert.deepEqual(await initial.json(), { state: blankState(), tasks: [], version: 0 });
 
   const body = JSON.stringify({ ...blankState(), profile: { ...blankState().profile, nickname: "Saved locally" } });
   const invalidOrigin = await fetch(`${base}/api/state`, {
@@ -227,12 +228,12 @@ test("HTTP allowlist serves app files, rejects arbitrary paths and protects muta
     body: "{}",
   });
   assert.equal(cleared.status, 200);
-  assert.deepEqual(await cleared.json(), { state: blankState(), version: 2 });
+  assert.deepEqual(await cleared.json(), { state: blankState(), tasks: [], version: 2 });
   const resurrection = await fetch(`${base}/api/state`, {
     method: "POST", headers: { ...headers, "X-LifePilot-Version": "1" }, body,
   });
   assert.equal(resurrection.status, 409);
-  assert.deepEqual(await (await fetch(`${base}/api/state`)).json(), { state: blankState(), version: 2 });
+  assert.deepEqual(await (await fetch(`${base}/api/state`)).json(), { state: blankState(), tasks: [], version: 2 });
 
   for (const host of [`example.invalid:${address.port}`, "localhost", "127.0.0.1", `localhost:${address.port === 4173 ? 4174 : 4173}`]) {
     const wrongHost = await new Promise((resolve, reject) => {
@@ -279,4 +280,136 @@ test("same-origin checks normalize default HTTP port but preserve exact loopback
     "http://localhost#fragment", "http://localhost:80/path"]) {
     assert.equal(sameOrigin("localhost", origin), false, String(origin));
   }
+});
+
+test("tasks persist independently of setup, support edit/complete/reopen, and clear atomically", (t) => {
+  const { directory, location } = temporaryDatabase();
+  let store = createStore(location);
+  const second = createStore(location);
+  const control = new DatabaseSync(location);
+  t.after(() => {
+    control.close();
+    second.close();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const profile = blankState();
+  profile.profile.nickname = "Synthetic task owner";
+  store.save(profile, 0);
+  const [first] = store.addTask({ title: "  Arrange a boiler service  ", completed: false }, 1);
+  assert.match(first.id, /^[0-9a-f-]{36}$/);
+  assert.equal(first.title, "Arrange a boiler service");
+  const newest = store.addTask({ title: "Find the synthetic manual", completed: false }, 2);
+  assert.equal(newest[1].id, first.id, "newest capture is listed first");
+  assert.deepEqual(store.load(), profile);
+  store.save({ ...profile, stage: "workspace" }, 3);
+  assert.deepEqual(store.loadTasks(), newest, "profile saves never overwrite tasks");
+  assert.throws(() => second.updateTask(first.id, { title: "Stale edit", completed: true }, 3), /stale/);
+  assert.throws(() => second.clear(3), /stale/);
+  store.updateTask(first.id, { title: "Arrange the service", completed: true }, 4);
+  store.close();
+  store = createStore(location);
+  assert.deepEqual(store.loadTasks()[1], { id: first.id, title: "Arrange the service", completed: true });
+  store.updateTask(first.id, { title: "Arrange the service", completed: false }, 5);
+  assert.equal(store.loadTasks()[1].completed, false);
+  assert.equal(store.load().stage, "workspace");
+
+  control.exec(`CREATE TRIGGER reject_clear_tasks BEFORE DELETE ON local_state
+    BEGIN SELECT RAISE(ABORT, 'synthetic clear failure'); END`);
+  assert.throws(() => store.clear(6), /synthetic clear failure/);
+  assert.equal(store.loadTasks().length, 2, "failed clear rolls back task deletion too");
+  assert.equal(store.getVersion(), 6);
+  control.exec("DROP TRIGGER reject_clear_tasks");
+  store.clear(6);
+  assert.deepEqual(store.loadTasks(), []);
+  assert.deepEqual(store.load(), blankState());
+  store.close();
+  store = createStore(location);
+  assert.equal(store.getVersion(), 7);
+  assert.deepEqual(store.loadTasks(), []);
+  assert.throws(() => second.addTask({ title: "Must not restore anything", completed: false }, 6), /stale/);
+});
+
+test("task validation, missing records and SQL failures do not consume a revision", (t) => {
+  const { directory, location } = temporaryDatabase();
+  const store = createStore(location);
+  const control = new DatabaseSync(location);
+  t.after(() => {
+    control.close();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  for (const task of [{ title: "", completed: false }, { title: "x".repeat(241), completed: false },
+    { title: "Task", completed: true }, { title: "Task", completed: false, extra: true }]) {
+    assert.throws(() => store.addTask(task, 0));
+    assert.equal(store.getVersion(), 0);
+  }
+  assert.throws(() => store.updateTask("missing", { title: "Task", completed: false }, 0), /not be found/);
+  assert.equal(store.getVersion(), 0);
+  control.exec(`CREATE TRIGGER reject_task BEFORE INSERT ON local_tasks
+    BEGIN SELECT RAISE(ABORT, 'synthetic task failure'); END`);
+  assert.throws(() => store.addTask({ title: "Task", completed: false }, 0), /synthetic task failure/);
+  assert.equal(store.getVersion(), 0);
+  assert.deepEqual(store.loadTasks(), []);
+  control.exec("DROP TRIGGER reject_task");
+  const [task] = store.addTask({ title: "Task", completed: false }, 0);
+  assert.throws(() => store.updateTask(task.id, { title: " ", completed: false }, 1));
+  assert.equal(store.getVersion(), 1);
+  assert.deepEqual(store.loadTasks(), [task]);
+});
+
+test("HTTP task API shares revision and origin protections with profile and clear", async (t) => {
+  const { directory, location } = temporaryDatabase();
+  const store = createStore(location);
+  const server = createServer({ store });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const headers = { "Content-Type": "application/json", "X-LifePilot-Request": "1", Origin: base };
+  const post = (endpoint, data, version) => fetch(`${base}/api/${endpoint}`, {
+    method: "POST", headers: { ...headers, "X-LifePilot-Version": String(version) }, body: JSON.stringify(data),
+  });
+  const input = { title: '<img src=x onerror="alert(1)">', completed: false };
+  const newTask = await post("tasks", input, 0);
+  assert.equal(newTask.status, 200);
+  const added = await newTask.json();
+  assert.equal(added.version, 1);
+  assert.equal(added.tasks[0].title, input.title, "text is stored verbatim, not interpreted");
+  const endpoint = `tasks/${added.tasks[0].id}`;
+  for (const target of ["tasks", endpoint]) {
+    for (const override of [
+      { Origin: "http://attacker.invalid" }, { "X-LifePilot-Request": "" },
+      { "Content-Type": "text/plain" }, { Origin: "null" },
+    ]) {
+      assert.equal((await fetch(`${base}/api/${target}`, {
+        method: "POST", headers: { ...headers, "X-LifePilot-Version": "1", ...override }, body: JSON.stringify(input),
+      })).status, 403);
+    }
+    assert.equal((await post(target, input, 0)).status, 409);
+    assert.equal((await post(target, input, "invalid")).status, 400);
+    assert.equal((await post(target, { ...input, title: " " }, 1)).status, 400);
+    assert.equal((await post(target, { ...input, title: "x".repeat(241) }, 1)).status, 400);
+    assert.equal((await post(target, { ...input, title: "x".repeat(33 * 1024) }, 1)).status, 413);
+  }
+  assert.equal((await post("state", blankState(), 0)).status, 409);
+  assert.equal((await post("tasks/00000000-0000-0000-0000-000000000000", input, 1)).status, 404);
+  assert.equal((await post("tasks/invalid", input, 1)).status, 404);
+  assert.equal(store.getVersion(), 1);
+  const edited = await post(endpoint, { title: "Arrange a boiler service", completed: true }, 1);
+  assert.equal(edited.status, 200);
+  assert.equal((await edited.json()).tasks[0].completed, true);
+  assert.equal((await post(endpoint, { title: "Arrange a boiler service", completed: false }, 2)).status, 200);
+  const read = await fetch(`${base}/api/state`);
+  assert.equal(read.headers.get("cache-control"), "no-store");
+  const saved = await read.json();
+  assert.equal(saved.tasks[0].completed, false);
+  assert.equal(saved.version, 3);
+  assert.equal((await post("clear", {}, 3)).status, 200);
+  assert.equal((await post(endpoint, input, 3)).status, 409);
+  assert.equal((await post("tasks", input, 3)).status, 409);
+  assert.deepEqual((await (await fetch(`${base}/api/state`)).json()).tasks, []);
 });

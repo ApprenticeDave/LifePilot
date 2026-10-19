@@ -18,13 +18,14 @@ and profile actions plus clearly unavailable future-area previews. One profile
 and setup progress persist in a local SQLite database. Users can resume, edit,
 or explicitly clear that data. Review edits return to review after correction;
 changing difficulty may ask one new, relevant optional follow-up. The
-dashboard's guidance shortcut returns to the dashboard.
+dashboard's guidance shortcut returns to the dashboard. The Tasks card now
+supports capture, editing, completion and reopening without setup.
 
 If another tab has saved newer data or cleared the profile, a stale save is
 rejected. Reload adopts the current saved state and discards unsaved changes in
 that tab; an older tab cannot recreate a cleared profile.
 
-The workspace does not implement tasks, reminders, notes or document storage,
+The workspace does not implement dates, reminders, notes or document storage,
 property management, or financial tracking. Country/region localization,
 accounts, cloud sync, notifications, and encryption are also absent. The local
 file can be read by someone with access to this computer or its files. See the
@@ -225,9 +226,62 @@ Proposals to refine before implementation:
 6. Which answers are retained, with what explanation and editing/deletion controls?
 7. Is sign-in needed, and if so, where does it belong in the journey?
 
+## Journey 2: get one thing off my mind
+
+### Goal and confirmed scope
+
+On 2026-10-18 the owner approved a small everyday task journey, with quick
+capture in one Tasks card on Home rather than inside responsibility cards.
+The goal is to put something down, trust it is saved, and return to act on it.
+No required dates or categories; no reminders, calendars, recurring tasks,
+AI-generated plans or financial tracking.
+
+### Implemented workflow
+
+1. Open Home, including through **Explore without setup**.
+2. Enter a task, such as the synthetic example "Arrange a boiler service",
+   and select **Add task** or press Enter.
+3. See the newest saved tasks under **To do**; Home previews up to two open
+   tasks and offers **Show all** when there are more.
+4. Expand **Show all** to reach older open tasks without removing them from
+   the list.
+5. Use **Edit** to change its text and **Save changes** to persist it.
+   **Cancel edit** leaves the saved task unchanged.
+6. Use **Mark done** to move it into an expandable **Completed** section.
+   Use **Reopen** there to bring it back to To do.
+
+On wider screens, the Tasks card is narrower than the main dashboard and the
+capture field and button sit on one row. On small screens the card fills the
+available width and capture controls stack. This layout is a product-owner
+preference and remains subject to visual review.
+
+Task titles are limited to 240 characters and cannot be blank. Drafts are
+not autosaved; input remains visible after a failed save for explicit retry.
+Save conflicts do not overwrite newer local data. Reload requires confirmation
+that unsaved drafts will be discarded. Tasks and profile changes share a
+revision so that an old tab cannot restore data after a clear.
+
+### Control, privacy and acceptance checks
+
+- Tasks work without completing the profile and survive reloads and restarts.
+- Task changes do not alter the profile or setup resume point.
+- Text is displayed as text, not interpreted as markup.
+- Completed tasks remain stored and can be reopened. Individual deletion is
+  not included; **Clear my local data** removes all tasks, profile and setup
+  together, with explicit confirmation. This is not secure device erasure.
+- Only an identifier, title and completion status are stored for each task.
+  They stay in the existing unencrypted local database; nothing is sent to an
+  external service. No inferred priorities, deadlines or reminders.
+- Capture supports keyboard submission, controls have contextual accessible
+  names, and narrow-screen layouts must contain long task text.
+
+These are bounded implementation choices, not proof of usability for every
+user. Intended-user and screen-reader validation remain outstanding.
+
 ## Scope boundary
 
 This discovery does not select technology, specify authentication or storage,
 approve integrations, or define detailed property, daily-planning, and finance
-workflows. Those journeys should follow the first-use discussion rather than be
+workflows. The task journey above is a separate, owner-approved increment;
+broader journeys should follow discovery rather than be
 invented from capability lists.

@@ -1,8 +1,9 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const { randomUUID } = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
-const { validateState, blankState, InvalidState } = require("./model");
+const { validateState, validateTask, blankState, InvalidState } = require("./model");
 
 const PORT = Number(process.env.PORT || 4173);
 const DATA_DIR = path.join(__dirname, ".data");
@@ -17,7 +18,13 @@ const STATIC = new Map([
 
 class StaleVersion extends Error {
   constructor() {
-    super("This setup is stale. Reload LifePilot before making changes.");
+    super("This local data is stale. Reload LifePilot before making changes.");
+  }
+}
+
+class TaskNotFound extends Error {
+  constructor() {
+    super("That task could not be found. Reload LifePilot to see saved tasks.");
   }
 }
 
@@ -43,6 +50,11 @@ function createStore(databasePath) {
       version INTEGER NOT NULL CHECK (version >= 0 AND version <= 9007199254740991)
     );
     INSERT OR IGNORE INTO local_revision (id, version) VALUES (1, 0);
+    CREATE TABLE IF NOT EXISTS local_tasks (
+      id TEXT PRIMARY KEY NOT NULL,
+      title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 240),
+      completed INTEGER NOT NULL CHECK (completed IN (0, 1))
+    );
   `);
   function mutate(expectedVersion, write) {
     validateVersion(expectedVersion);
@@ -60,6 +72,10 @@ function createStore(databasePath) {
       try { db.exec("ROLLBACK"); } catch {}
       throw error;
     }
+  }
+  function loadTasks() {
+    return db.prepare("SELECT id, title, completed FROM local_tasks ORDER BY rowid DESC").all()
+      .map((row) => ({ id: row.id, ...validateTask({ title: row.title, completed: row.completed === 1 }) }));
   }
   return {
     getVersion() {
@@ -83,8 +99,28 @@ function createStore(databasePath) {
         return valid;
       });
     },
+    loadTasks,
+    addTask(task, expectedVersion) {
+      const valid = validateTask(task);
+      if (valid.completed) throw new InvalidState("New tasks must start unfinished.");
+      return mutate(expectedVersion, () => {
+        db.prepare("INSERT INTO local_tasks (id, title, completed) VALUES (?, ?, 0)")
+          .run(randomUUID(), valid.title);
+        return loadTasks();
+      });
+    },
+    updateTask(id, task, expectedVersion) {
+      const valid = validateTask(task);
+      return mutate(expectedVersion, () => {
+        const result = db.prepare("UPDATE local_tasks SET title = ?, completed = ? WHERE id = ?")
+          .run(valid.title, Number(valid.completed), id);
+        if (result.changes !== 1) throw new TaskNotFound();
+        return loadTasks();
+      });
+    },
     clear(expectedVersion) {
       return mutate(expectedVersion, () => {
+        db.prepare("DELETE FROM local_tasks").run();
         db.prepare("DELETE FROM local_state WHERE id = 1").run();
         return blankState();
       });
@@ -155,16 +191,19 @@ function createServer({ store = createStore(DB_PATH), publicDir = path.join(__di
       if (request.method === "GET" && pathname === "/api/state") {
         try {
           // Retry if another database connection writes between these synchronous reads.
-          let version, state;
+          let version, state, tasks;
           do {
             version = store.getVersion();
             state = store.load();
+            tasks = store.loadTasks();
           } while (version !== store.getVersion());
-          return json(response, 200, { state, version });
+          return json(response, 200, { state, tasks, version });
         }
-        catch { return json(response, 500, { error: "Could not read saved setup. Your local data has not been changed." }); }
+        catch { return json(response, 500, { error: "Could not read saved local data. Your local data has not been changed." }); }
       }
-      if (request.method === "POST" && (pathname === "/api/state" || pathname === "/api/clear")) {
+      const taskMatch = /^\/api\/tasks\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(pathname);
+      if (request.method === "POST" && (pathname === "/api/state" || pathname === "/api/clear" ||
+          pathname === "/api/tasks" || taskMatch)) {
         if (!isSameOrigin(request, boundPort) || request.headers["x-lifepilot-request"] !== "1" ||
             !/^application\/json(?:\s*;|$)/i.test(request.headers["content-type"] || "")) {
           return json(response, 403, { error: "This local request was not accepted. Reload LifePilot and try again." });
@@ -181,15 +220,21 @@ function createServer({ store = createStore(DB_PATH), publicDir = path.join(__di
             if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 0) {
               return json(response, 400, { error: "The clear request was not valid." });
             }
-            return json(response, 200, { state: store.clear(expectedVersion), version: expectedVersion + 1 });
+            return json(response, 200, { state: store.clear(expectedVersion), tasks: [], version: expectedVersion + 1 });
+          }
+          if (pathname === "/api/tasks" || taskMatch) {
+            const tasks = taskMatch ? store.updateTask(taskMatch[1], input, expectedVersion) :
+              store.addTask(input, expectedVersion);
+            return json(response, 200, { tasks, version: expectedVersion + 1 });
           }
           return json(response, 200, { state: store.save(input, expectedVersion), version: expectedVersion + 1 });
         } catch (error) {
           if (error instanceof StaleVersion) return json(response, 409, { error: error.message });
+          if (error instanceof TaskNotFound) return json(response, 404, { error: error.message });
           if (error.status === 413) return json(response, 413, { error: "Request is too large." });
           if (error instanceof InvalidState) return json(response, 400, { error: error.message });
           if (error instanceof SyntaxError) return json(response, 400, { error: "Request must contain valid JSON." });
-          return json(response, 500, { error: "Could not save local setup data. Check that the database is available and retry." });
+          return json(response, 500, { error: "Could not save local data. Check that the database is available and retry." });
         }
       }
       return json(response, 404, { error: "Not found." });
@@ -226,7 +271,7 @@ if (require.main === module) {
   const server = createServer({ store });
   server.listen(PORT, "127.0.0.1", () => {
     console.log(`LifePilot is available at http://127.0.0.1:${PORT}`);
-    console.log("Local-only server. Profile data stays in the .data folder on this computer.");
+    console.log("Local-only server. Profile and task data stay on this computer.");
   });
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => server.close(() => { store.close(); process.exit(0); }));
